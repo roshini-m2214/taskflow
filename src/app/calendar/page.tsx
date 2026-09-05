@@ -15,15 +15,9 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type TaskStatus =
-  | "todo"
-  | "in_progress"
-  | "completed";
+type TaskStatus = "todo" | "in_progress" | "completed";
 
-type TaskPriority =
-  | "low"
-  | "normal"
-  | "high";
+type TaskPriority = "low" | "normal" | "high";
 
 type Task = {
   id: string;
@@ -71,20 +65,14 @@ const WEEKDAYS = [
 function formatDate(date: Date) {
   const year = date.getFullYear();
 
-  const month = String(
-    date.getMonth() + 1
-  ).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
 
-  const day = String(
-    date.getDate()
-  ).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
 
-function formatReminder(
-  minutes: number | null
-) {
+function formatReminder(minutes: number | null) {
   if (minutes === null) {
     return "No reminder";
   }
@@ -110,60 +98,58 @@ export default function CalendarPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [currentDate, setCurrentDate] =
-    useState(new Date());
+  const [currentDate, setCurrentDate] = useState(new Date());
 
-  const [selectedDate, setSelectedDate] =
-    useState(formatDate(new Date()));
+  const [selectedDate, setSelectedDate] = useState(
+    formatDate(new Date())
+  );
 
-  const [showModal, setShowModal] =
-    useState(false);
+  const [showModal, setShowModal] = useState(false);
 
-  const [title, setTitle] =
-    useState("");
+  const [title, setTitle] = useState("");
 
-  const [description, setDescription] =
-    useState("");
+  const [description, setDescription] = useState("");
 
   const [priority, setPriority] =
     useState<TaskPriority>("normal");
 
-  const [important, setImportant] =
-    useState(false);
+  const [important, setImportant] = useState(false);
 
-  const [dueTime, setDueTime] =
-    useState("");
+  const [dueTime, setDueTime] = useState("");
 
   const [reminderMinutes, setReminderMinutes] =
     useState<number | null>(30);
 
-  const [saving, setSaving] =
-    useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const year =
-    currentDate.getFullYear();
+  const year = currentDate.getFullYear();
 
-  const month =
-    currentDate.getMonth();
+  const month = currentDate.getMonth();
 
   /*
    * LOAD TASKS
    */
-  async function loadTasks() {
-    setLoading(true);
+  useEffect(() => {
+    let cancelled = false;
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    async function loadInitialTasks() {
+      setLoading(true);
 
-    if (!user) {
-      setLoading(false);
-      router.push("/login");
-      return;
-    }
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    const { data, error } =
-      await supabase
+      if (cancelled) {
+        return;
+      }
+
+      if (!user) {
+        setLoading(false);
+        router.push("/login");
+        return;
+      }
+
+      const { data, error } = await supabase
         .from("tasks")
         .select(
           `
@@ -188,130 +174,186 @@ export default function CalendarPage() {
           nullsFirst: false,
         });
 
-    if (error) {
-      console.error(
-        "Error loading tasks:",
-        error
-      );
+      if (cancelled) {
+        return;
+      }
 
-      setTasks([]);
-    } else {
-      setTasks((data ?? []) as Task[]);
+      if (error) {
+        console.error(
+          "Error loading tasks:",
+          error
+        );
+
+        setTasks([]);
+      } else {
+        setTasks((data ?? []) as Task[]);
+      }
+
+      setLoading(false);
     }
 
-    setLoading(false);
-  }
+    void loadInitialTasks();
 
-  /*
-   * INITIAL LOAD
-   */
-  useEffect(() => {
-    loadTasks();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   /*
    * AUTO REFRESH
    *
-   * Replaces the Supabase Realtime listener.
-   * This avoids the postgres_changes callback
-   * error while still keeping the calendar
-   * reasonably up to date.
+   * Refreshes tasks every 10 seconds.
+   * This replaces the Supabase Realtime listener.
    */
   useEffect(() => {
+    let cancelled = false;
+
+    async function refreshTasks() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (!user) {
+        router.push("/login");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("tasks")
+        .select(
+          `
+            id,
+            user_id,
+            title,
+            description,
+            status,
+            priority,
+            due_date,
+            due_time,
+            reminder_minutes,
+            is_important
+          `
+        )
+        .eq("user_id", user.id)
+        .order("due_date", {
+          ascending: true,
+        })
+        .order("due_time", {
+          ascending: true,
+          nullsFirst: false,
+        });
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(
+          "Error refreshing tasks:",
+          error
+        );
+
+        return;
+      }
+
+      setTasks((data ?? []) as Task[]);
+    }
+
     const interval = setInterval(() => {
-      loadTasks();
+      void refreshTasks();
     }, 10000);
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [router]);
 
   /*
    * CALENDAR DAYS
    */
-  const calendarDays =
-    useMemo<CalendarDay[]>(() => {
-      const days: CalendarDay[] = [];
+  const calendarDays = useMemo<CalendarDay[]>(() => {
+    const days: CalendarDay[] = [];
 
-      const firstDayOfMonth =
-        new Date(
+    const firstDayOfMonth = new Date(
+      year,
+      month,
+      1
+    ).getDay();
+
+    const daysInCurrentMonth = new Date(
+      year,
+      month + 1,
+      0
+    ).getDate();
+
+    /*
+     * PREVIOUS MONTH
+     */
+    for (
+      let i = firstDayOfMonth - 1;
+      i >= 0;
+      i--
+    ) {
+      days.push({
+        date: new Date(
           year,
           month,
-          1
-        ).getDay();
+          -i
+        ),
+        currentMonth: false,
+      });
+    }
 
-      const daysInCurrentMonth =
-        new Date(
+    /*
+     * CURRENT MONTH
+     */
+    for (
+      let day = 1;
+      day <= daysInCurrentMonth;
+      day++
+    ) {
+      days.push({
+        date: new Date(
+          year,
+          month,
+          day
+        ),
+        currentMonth: true,
+      });
+    }
+
+    /*
+     * NEXT MONTH
+     */
+    let nextDay = 1;
+
+    while (days.length < 42) {
+      days.push({
+        date: new Date(
           year,
           month + 1,
-          0
-        ).getDate();
+          nextDay
+        ),
+        currentMonth: false,
+      });
 
-      /*
-       * PREVIOUS MONTH
-       */
-      for (
-        let i = firstDayOfMonth - 1;
-        i >= 0;
-        i--
-      ) {
-        days.push({
-          date: new Date(
-            year,
-            month,
-            -i
-          ),
-          currentMonth: false,
-        });
-      }
+      nextDay++;
+    }
 
-      /*
-       * CURRENT MONTH
-       */
-      for (
-        let day = 1;
-        day <= daysInCurrentMonth;
-        day++
-      ) {
-        days.push({
-          date: new Date(
-            year,
-            month,
-            day
-          ),
-          currentMonth: true,
-        });
-      }
-
-      /*
-       * NEXT MONTH
-       */
-      let nextDay = 1;
-
-      while (days.length < 42) {
-        days.push({
-          date: new Date(
-            year,
-            month + 1,
-            nextDay
-          ),
-          currentMonth: false,
-        });
-
-        nextDay++;
-      }
-
-      return days;
-    }, [year, month]);
+    return days;
+  }, [year, month]);
 
   const selectedTasks = tasks.filter(
     (task) =>
       task.due_date === selectedDate
   );
 
-  const today =
-    formatDate(new Date());
+  const today = formatDate(new Date());
 
   function goPreviousMonth() {
     setCurrentDate(
@@ -373,42 +415,39 @@ export default function CalendarPage() {
       return;
     }
 
-    const { data, error } =
-      await supabase
-        .from("tasks")
-        .insert({
-          user_id: user.id,
-          title: title.trim(),
-          description:
-            description.trim()
-              ? description.trim()
-              : null,
-          status: "todo",
+    const { data, error } = await supabase
+      .from("tasks")
+      .insert({
+        user_id: user.id,
+        title: title.trim(),
+        description:
+          description.trim()
+            ? description.trim()
+            : null,
+        status: "todo",
+        priority,
+        due_date: selectedDate,
+        due_time: dueTime || null,
+        reminder_minutes: dueTime
+          ? reminderMinutes
+          : null,
+        is_important: important,
+      })
+      .select(
+        `
+          id,
+          user_id,
+          title,
+          description,
+          status,
           priority,
-          due_date: selectedDate,
-          due_time:
-            dueTime || null,
-          reminder_minutes:
-            dueTime
-              ? reminderMinutes
-              : null,
-          is_important: important,
-        })
-        .select(
-          `
-            id,
-            user_id,
-            title,
-            description,
-            status,
-            priority,
-            due_date,
-            due_time,
-            reminder_minutes,
-            is_important
-          `
-        )
-        .single();
+          due_date,
+          due_time,
+          reminder_minutes,
+          is_important
+        `
+      )
+      .single();
 
     if (error) {
       console.error(
@@ -436,23 +475,20 @@ export default function CalendarPage() {
   /*
    * TOGGLE COMPLETE
    */
-  async function toggleComplete(
-    task: Task
-  ) {
+  async function toggleComplete(task: Task) {
     const newStatus: TaskStatus =
       task.status === "completed"
         ? "todo"
         : "completed";
 
-    const { error } =
-      await supabase
-        .from("tasks")
-        .update({
-          status: newStatus,
-          updated_at:
-            new Date().toISOString(),
-        })
-        .eq("id", task.id);
+    const { error } = await supabase
+      .from("tasks")
+      .update({
+        status: newStatus,
+        updated_at:
+          new Date().toISOString(),
+      })
+      .eq("id", task.id);
 
     if (error) {
       console.error(
@@ -483,11 +519,10 @@ export default function CalendarPage() {
   async function deleteTask(
     taskId: string
   ) {
-    const { error } =
-      await supabase
-        .from("tasks")
-        .delete()
-        .eq("id", taskId);
+    const { error } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", taskId);
 
     if (error) {
       console.error(
@@ -510,9 +545,7 @@ export default function CalendarPage() {
   /*
    * TASK COLORS
    */
-  function getTaskClasses(
-    task: Task
-  ) {
+  function getTaskClasses(task: Task) {
     if (task.status === "completed") {
       return "bg-emerald-100/80 text-emerald-600 border-emerald-200";
     }

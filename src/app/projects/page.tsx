@@ -12,9 +12,9 @@ import {
   ArrowLeft,
   CheckCircle2,
   Circle,
-  CalendarDays,
   ListTodo,
 } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
 type Project = {
@@ -76,7 +76,7 @@ const projectColors = [
 export default function ProjectsPage() {
   const router = useRouter();
 
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
 
@@ -100,67 +100,81 @@ export default function ProjectsPage() {
     useState("pink");
 
   useEffect(() => {
-    loadProjects();
-  }, []);
+    let cancelled = false;
 
-  async function loadProjects() {
-    setLoading(true);
+    const loadProjects = async () => {
+      setLoading(true);
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+      const {
+        data: { user: currentUser },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (userError || !user) {
-      router.push("/login");
-      return;
-    }
+      if (cancelled) {
+        return;
+      }
 
-    setUser(user);
+      if (userError || !currentUser) {
+        router.push("/login");
+        return;
+      }
 
-    const [
-      { data: projectData, error: projectError },
-      { data: taskData, error: taskError },
-    ] = await Promise.all([
-      supabase
-        .from("projects")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", {
-          ascending: false,
-        }),
+      setUser(currentUser);
 
-      supabase
-        .from("tasks")
-        .select(
-          "id, user_id, project_id, title, status, priority, due_date, is_important"
-        )
-        .eq("user_id", user.id)
-        .order("created_at", {
-          ascending: false,
-        }),
-    ]);
+      const [
+        { data: projectData, error: projectError },
+        { data: taskData, error: taskError },
+      ] = await Promise.all([
+        supabase
+          .from("projects")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .order("created_at", {
+            ascending: false,
+          }),
 
-    if (projectError) {
-      console.error(
-        "Error loading projects:",
-        projectError
-      );
-    } else {
-      setProjects((projectData || []) as Project[]);
-    }
+        supabase
+          .from("tasks")
+          .select(
+            "id, user_id, project_id, title, status, priority, due_date, is_important"
+          )
+          .eq("user_id", currentUser.id)
+          .order("created_at", {
+            ascending: false,
+          }),
+      ]);
 
-    if (taskError) {
-      console.error(
-        "Error loading tasks:",
-        taskError
-      );
-    } else {
-      setTasks((taskData || []) as Task[]);
-    }
+      if (cancelled) {
+        return;
+      }
 
-    setLoading(false);
-  }
+      if (projectError) {
+        console.error(
+          "Error loading projects:",
+          projectError
+        );
+      } else {
+        setProjects((projectData || []) as Project[]);
+      }
+
+      if (taskError) {
+        console.error(
+          "Error loading tasks:",
+          taskError
+        );
+      } else {
+        setTasks((taskData || []) as Task[]);
+      }
+
+      setLoading(false);
+    };
+
+    void loadProjects();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   function resetForm() {
     setProjectName("");
@@ -217,7 +231,7 @@ export default function ProjectsPage() {
   }
 
   async function saveProject() {
-    if (!selectedProject || !projectName.trim()) {
+    if (!selectedProject || !projectName.trim() || !user) {
       return;
     }
 
@@ -261,6 +275,8 @@ export default function ProjectsPage() {
   }
 
   async function deleteProject(project: Project) {
+    if (!user) return;
+
     const confirmed = window.confirm(
       `Delete "${project.name}"? Tasks inside this project will not be deleted.`
     );

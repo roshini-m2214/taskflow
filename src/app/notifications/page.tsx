@@ -1,20 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft,
   Bell,
-  BellRing,
   Check,
   CheckCheck,
-  Trash2,
-  Clock3,
-  AlertTriangle,
-  Star,
+  Clock,
   FolderKanban,
-  Info,
   Loader2,
+  Star,
+  Trash2,
+  AlertCircle,
+  Inbox,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -35,20 +33,60 @@ type Notification = {
   task_id: string | null;
   project_id: string | null;
   created_at: string;
+  reminder_key?: string | null;
 };
+
+type FilterType = "all" | "unread" | "deadline" | "important" | "project";
 
 export default function NotificationsPage() {
   const router = useRouter();
 
-  const [notifications, setNotifications] =
-    useState<Notification[]>([]);
-
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] =
-    useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterType>("all");
 
   useEffect(() => {
-    loadNotifications();
+    let cancelled = false;
+
+    const loadNotifications = async () => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (userError || !user) {
+        router.push("/login");
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        });
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error("Error loading notifications:", error);
+        setNotifications([]);
+      } else {
+        setNotifications((data ?? []) as Notification[]);
+      }
+
+      setLoading(false);
+    };
+
+    void loadNotifications();
 
     const channel = supabase
       .channel("notifications-realtime")
@@ -59,53 +97,84 @@ export default function NotificationsPage() {
           schema: "public",
           table: "notifications",
         },
-        () => {
-          loadNotifications();
+        async () => {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+
+          if (!user || cancelled) {
+            return;
+          }
+
+          const { data, error } = await supabase
+            .from("notifications")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("created_at", {
+              ascending: false,
+            });
+
+          if (cancelled) {
+            return;
+          }
+
+          if (error) {
+            console.error(
+              "Error refreshing notifications:",
+              error
+            );
+            return;
+          }
+
+          setNotifications((data ?? []) as Notification[]);
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [router]);
 
-  async function loadNotifications() {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+  const unreadCount = useMemo(() => {
+    return notifications.filter(
+      (notification) => !notification.is_read
+    ).length;
+  }, [notifications]);
 
-    if (userError || !user) {
-      router.push("/login");
-      return;
+  const filteredNotifications = useMemo(() => {
+    switch (filter) {
+      case "unread":
+        return notifications.filter(
+          (notification) => !notification.is_read
+        );
+
+      case "deadline":
+        return notifications.filter(
+          (notification) =>
+            notification.type === "deadline" ||
+            notification.type === "overdue"
+        );
+
+      case "important":
+        return notifications.filter(
+          (notification) => notification.type === "important"
+        );
+
+      case "project":
+        return notifications.filter(
+          (notification) => notification.type === "project"
+        );
+
+      default:
+        return notifications;
     }
+  }, [notifications, filter]);
 
-    const { data, error } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", {
-        ascending: false,
-      });
+  const markAsRead = async (notificationId: string) => {
+    setActionLoading(notificationId);
 
-    if (error) {
-      console.error(
-        "Error loading notifications:",
-        error
-      );
-    } else {
-      setNotifications(
-        (data || []) as Notification[]
-      );
-    }
-
-    setLoading(false);
-  }
-
-  async function markAsRead(
-    notificationId: string
-  ) {
     const { error } = await supabase
       .from("notifications")
       .update({
@@ -118,32 +187,40 @@ export default function NotificationsPage() {
         "Error marking notification as read:",
         error
       );
+    } else {
+      setNotifications((current) =>
+        current.map((notification) =>
+          notification.id === notificationId
+            ? {
+                ...notification,
+                is_read: true,
+              }
+            : notification
+        )
+      );
+    }
+
+    setActionLoading(null);
+  };
+
+  const markAllAsRead = async () => {
+    if (unreadCount === 0) {
       return;
     }
 
-    setNotifications((current) =>
-      current.map((notification) =>
-        notification.id === notificationId
-          ? {
-              ...notification,
-              is_read: true,
-            }
-          : notification
-      )
-    );
-  }
-
-  async function markAllAsRead() {
-    if (unreadCount === 0) return;
-
-    setActionLoading(true);
+    setActionLoading("all");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/login");
+    if (userError || !user) {
+      console.error(
+        "Unable to get current user:",
+        userError
+      );
+      setActionLoading(null);
       return;
     }
 
@@ -160,23 +237,23 @@ export default function NotificationsPage() {
         "Error marking all notifications as read:",
         error
       );
-      setActionLoading(false);
-      return;
+    } else {
+      setNotifications((current) =>
+        current.map((notification) => ({
+          ...notification,
+          is_read: true,
+        }))
+      );
     }
 
-    setNotifications((current) =>
-      current.map((notification) => ({
-        ...notification,
-        is_read: true,
-      }))
-    );
+    setActionLoading(null);
+  };
 
-    setActionLoading(false);
-  }
-
-  async function deleteNotification(
+  const deleteNotification = async (
     notificationId: string
-  ) {
+  ) => {
+    setActionLoading(notificationId);
+
     const { error } = await supabase
       .from("notifications")
       .delete()
@@ -187,111 +264,20 @@ export default function NotificationsPage() {
         "Error deleting notification:",
         error
       );
-      return;
-    }
-
-    setNotifications((current) =>
-      current.filter(
-        (notification) =>
-          notification.id !== notificationId
-      )
-    );
-  }
-
-  async function clearAllNotifications() {
-    if (notifications.length === 0) return;
-
-    const confirmed = window.confirm(
-      "Delete all notifications?"
-    );
-
-    if (!confirmed) return;
-
-    setActionLoading(true);
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("notifications")
-      .delete()
-      .eq("user_id", user.id);
-
-    if (error) {
-      console.error(
-        "Error clearing notifications:",
-        error
+    } else {
+      setNotifications((current) =>
+        current.filter(
+          (notification) =>
+            notification.id !== notificationId
+        )
       );
-      setActionLoading(false);
-      return;
     }
 
-    setNotifications([]);
-    setActionLoading(false);
-  }
+    setActionLoading(null);
+  };
 
-  function getNotificationIcon(
-    type: NotificationType
-  ) {
-    switch (type) {
-      case "deadline":
-        return (
-          <Clock3 className="w-5 h-5 text-pink-500" />
-        );
-
-      case "overdue":
-        return (
-          <AlertTriangle className="w-5 h-5 text-rose-500" />
-        );
-
-      case "important":
-        return (
-          <Star className="w-5 h-5 text-pink-500 fill-pink-400" />
-        );
-
-      case "project":
-        return (
-          <FolderKanban className="w-5 h-5 text-fuchsia-500" />
-        );
-
-      default:
-        return (
-          <Info className="w-5 h-5 text-pink-500" />
-        );
-    }
-  }
-
-  function getNotificationBackground(
-    type: NotificationType
-  ) {
-    switch (type) {
-      case "deadline":
-        return "bg-pink-50";
-
-      case "overdue":
-        return "bg-rose-50";
-
-      case "important":
-        return "bg-pink-50";
-
-      case "project":
-        return "bg-fuchsia-50";
-
-      default:
-        return "bg-slate-50";
-    }
-  }
-
-  function formatTime(
-    createdAt: string
-  ) {
-    const date = new Date(createdAt);
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
     const now = new Date();
 
     const difference =
@@ -321,28 +307,98 @@ export default function NotificationsPage() {
       return `${days}d ago`;
     }
 
-    return date.toLocaleDateString("en-US", {
-      month: "short",
+    return date.toLocaleDateString("en-IN", {
       day: "numeric",
+      month: "short",
       year: "numeric",
     });
-  }
+  };
 
-  const unreadCount = notifications.filter(
-    (notification) => !notification.is_read
-  ).length;
+  const getNotificationIcon = (
+    type: NotificationType
+  ) => {
+    switch (type) {
+      case "deadline":
+        return (
+          <Clock className="h-5 w-5" />
+        );
+
+      case "overdue":
+        return (
+          <AlertCircle className="h-5 w-5" />
+        );
+
+      case "important":
+        return (
+          <Star className="h-5 w-5" />
+        );
+
+      case "project":
+        return (
+          <FolderKanban className="h-5 w-5" />
+        );
+
+      default:
+        return (
+          <Bell className="h-5 w-5" />
+        );
+    }
+  };
+
+  const getNotificationIconBackground = (
+    type: NotificationType
+  ) => {
+    switch (type) {
+      case "deadline":
+        return "bg-orange-100 text-orange-600";
+
+      case "overdue":
+        return "bg-red-100 text-red-600";
+
+      case "important":
+        return "bg-yellow-100 text-yellow-600";
+
+      case "project":
+        return "bg-purple-100 text-purple-600";
+
+      default:
+        return "bg-pink-100 text-pink-600";
+    }
+  };
+
+  const getNotificationTypeLabel = (
+    type: NotificationType
+  ) => {
+    switch (type) {
+      case "deadline":
+        return "Deadline";
+
+      case "overdue":
+        return "Overdue";
+
+      case "important":
+        return "Important";
+
+      case "project":
+        return "Project";
+
+      default:
+        return "General";
+    }
+  };
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-pink-300 via-pink-400 to-rose-500 flex items-center justify-center mx-auto mb-4 shadow-[inset_4px_4px_10px_rgba(255,255,255,0.65),inset_-5px_-5px_12px_rgba(190,24,93,0.25),0_15px_30px_rgba(236,72,153,0.25)]">
-            <Bell className="w-7 h-7 text-white" />
-          </div>
+      <main className="min-h-screen bg-[#fff0f5] px-4 py-8">
+        <div className="mx-auto flex min-h-[80vh] max-w-5xl items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/70 bg-white/60 shadow-lg backdrop-blur-xl">
+              <Loader2 className="h-6 w-6 animate-spin text-pink-500" />
+            </div>
 
-          <div className="flex items-center gap-2 text-slate-400">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Loading notifications...
+            <p className="text-sm font-medium text-pink-900/60">
+              Loading notifications...
+            </p>
           </div>
         </div>
       </main>
@@ -350,230 +406,271 @@ export default function NotificationsPage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white text-slate-800">
-      {/* Background */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -top-40 -left-32 w-[450px] h-[450px] rounded-full bg-pink-200/50 blur-3xl" />
-
-        <div className="absolute top-1/3 -right-40 w-[500px] h-[500px] rounded-full bg-rose-200/45 blur-3xl" />
-
-        <div className="absolute -bottom-40 left-1/3 w-[500px] h-[500px] rounded-full bg-fuchsia-100/50 blur-3xl" />
+    <main className="min-h-screen overflow-hidden bg-[#fff0f5] px-4 py-6 text-pink-950 sm:px-6 lg:px-8">
+      {/* Decorative background */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-pink-300/30 blur-3xl" />
+        <div className="absolute -right-32 top-20 h-96 w-96 rounded-full bg-fuchsia-300/20 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-96 w-96 rounded-full bg-orange-200/20 blur-3xl" />
       </div>
 
-      <div className="relative z-10 min-h-screen p-4 md:p-8">
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div className="mx-auto max-w-5xl">
+        {/* Header */}
+        <header className="mb-6 rounded-[28px] border border-white/70 bg-white/55 p-5 shadow-[0_20px_60px_rgba(236,72,153,0.10)] backdrop-blur-2xl sm:p-7">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
-              <button
-                onClick={() =>
-                  router.push("/dashboard")
-                }
-                className="w-11 h-11 rounded-2xl border border-white/80 bg-white/70 backdrop-blur-xl flex items-center justify-center text-slate-500 hover:text-pink-500 hover:bg-white transition shadow-[0_10px_25px_rgba(190,24,93,0.08)]"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
+              <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/80 bg-gradient-to-br from-pink-400/80 to-fuchsia-400/70 text-white shadow-lg shadow-pink-300/30">
+                <Bell className="h-6 w-6" />
+
+                {unreadCount > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 flex h-6 min-w-6 items-center justify-center rounded-full border-2 border-white bg-red-500 px-1 text-[10px] font-bold text-white shadow-md">
+                    {unreadCount > 99
+                      ? "99+"
+                      : unreadCount}
+                  </span>
+                )}
+              </div>
 
               <div>
-                <p className="text-sm font-semibold text-pink-400">
-                  TaskFlow
-                </p>
-
-                <h1 className="text-3xl md:text-4xl font-bold">
+                <h1 className="text-2xl font-bold tracking-tight text-pink-950 sm:text-3xl">
                   Notifications
                 </h1>
 
-                <p className="text-slate-400 mt-1">
-                  Stay updated with your tasks.
+                <p className="mt-1 text-sm text-pink-900/55">
+                  Stay updated with your tasks and projects.
                 </p>
               </div>
             </div>
 
-            {notifications.length > 0 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={markAllAsRead}
-                  disabled={
-                    unreadCount === 0 ||
-                    actionLoading
-                  }
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/70 border border-white/80 text-sm font-semibold text-slate-500 hover:text-pink-500 hover:bg-white transition disabled:opacity-40"
-                >
-                  <CheckCheck className="w-4 h-4" />
-                  Mark all read
-                </button>
+            {unreadCount > 0 && (
+              <button
+                type="button"
+                onClick={markAllAsRead}
+                disabled={actionLoading === "all"}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-pink-200/70 bg-white/70 px-4 py-2.5 text-sm font-semibold text-pink-700 shadow-sm transition hover:bg-white hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {actionLoading === "all" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCheck className="h-4 w-4" />
+                )}
 
-                <button
-                  onClick={clearAllNotifications}
-                  disabled={actionLoading}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/70 border border-white/80 text-sm font-semibold text-slate-500 hover:text-red-500 hover:bg-white transition disabled:opacity-40"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Clear all
-                </button>
-              </div>
+                Mark all as read
+              </button>
             )}
           </div>
+        </header>
 
-          {/* Summary */}
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="rounded-[26px] border border-white/80 bg-white/60 backdrop-blur-2xl p-5 shadow-[0_20px_50px_rgba(190,24,93,0.08),inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400">
-                    Total
-                  </p>
+        {/* Filters */}
+        <div className="mb-5 overflow-x-auto">
+          <div className="flex min-w-max gap-2 rounded-2xl border border-white/70 bg-white/45 p-2 shadow-sm backdrop-blur-xl">
+            {[
+              {
+                id: "all" as const,
+                label: "All",
+                count: notifications.length,
+              },
+              {
+                id: "unread" as const,
+                label: "Unread",
+                count: unreadCount,
+              },
+              {
+                id: "deadline" as const,
+                label: "Deadlines",
+                count: notifications.filter(
+                  (notification) =>
+                    notification.type === "deadline" ||
+                    notification.type === "overdue"
+                ).length,
+              },
+              {
+                id: "important" as const,
+                label: "Important",
+                count: notifications.filter(
+                  (notification) =>
+                    notification.type === "important"
+                ).length,
+              },
+              {
+                id: "project" as const,
+                label: "Projects",
+                count: notifications.filter(
+                  (notification) =>
+                    notification.type === "project"
+                ).length,
+              },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setFilter(item.id)}
+                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                  filter === item.id
+                    ? "bg-gradient-to-r from-pink-500 to-fuchsia-500 text-white shadow-md shadow-pink-300/30"
+                    : "text-pink-900/60 hover:bg-white/70 hover:text-pink-900"
+                }`}
+              >
+                {item.label}
 
-                  <p className="text-3xl font-bold mt-1">
-                    {notifications.length}
-                  </p>
-                </div>
-
-                <div className="w-11 h-11 rounded-2xl bg-pink-100 flex items-center justify-center">
-                  <Bell className="w-5 h-5 text-pink-500" />
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[26px] border border-white/80 bg-white/60 backdrop-blur-2xl p-5 shadow-[0_20px_50px_rgba(190,24,93,0.08),inset_0_1px_0_rgba(255,255,255,0.9)]">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-slate-400">
-                    Unread
-                  </p>
-
-                  <p className="text-3xl font-bold mt-1 text-pink-500">
-                    {unreadCount}
-                  </p>
-                </div>
-
-                <div className="w-11 h-11 rounded-2xl bg-pink-100 flex items-center justify-center">
-                  <BellRing className="w-5 h-5 text-pink-500" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Notifications */}
-          <div className="rounded-[32px] border border-white/80 bg-white/60 backdrop-blur-2xl p-4 md:p-6 shadow-[0_25px_70px_rgba(190,24,93,0.1),inset_0_1px_0_rgba(255,255,255,0.9)]">
-            {notifications.length === 0 ? (
-              <div className="py-20 text-center">
-                <div className="w-20 h-20 rounded-[28px] bg-pink-100 flex items-center justify-center mx-auto mb-5">
-                  <Bell className="w-9 h-9 text-pink-400" />
-                </div>
-
-                <h2 className="text-xl font-bold">
-                  You&apos;re all caught up
-                </h2>
-
-                <p className="text-slate-400 mt-2 max-w-md mx-auto">
-                  You don&apos;t have any notifications
-                  yet. New task updates and reminders
-                  will appear here.
-                </p>
-
-                <button
-                  onClick={() =>
-                    router.push("/dashboard")
-                  }
-                  className="mt-6 px-5 py-3 rounded-2xl bg-gradient-to-r from-pink-400 to-rose-500 text-white font-semibold shadow-[inset_2px_2px_6px_rgba(255,255,255,0.4),0_12px_25px_rgba(236,72,153,0.2)]"
+                <span
+                  className={`ml-1.5 ${
+                    filter === item.id
+                      ? "text-white/80"
+                      : "text-pink-900/35"
+                  }`}
                 >
-                  Go to Dashboard
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {notifications.map(
-                  (notification) => (
-                    <div
-                      key={notification.id}
-                      className={`relative rounded-2xl border p-4 transition ${
-                        notification.is_read
-                          ? "border-white/80 bg-white/50"
-                          : "border-pink-100 bg-white/85 shadow-[0_10px_30px_rgba(236,72,153,0.08)]"
-                      }`}
-                    >
-                      {!notification.is_read && (
-                        <div className="absolute left-0 top-5 bottom-5 w-1 rounded-r-full bg-gradient-to-b from-pink-400 to-rose-500" />
-                      )}
+                  {item.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-                      <div className="flex items-start gap-4">
-                        <div
-                          className={`w-11 h-11 shrink-0 rounded-2xl flex items-center justify-center ${getNotificationBackground(
-                            notification.type
-                          )}`}
-                        >
-                          {getNotificationIcon(
-                            notification.type
-                          )}
-                        </div>
+        {/* Notification list */}
+        {filteredNotifications.length === 0 ? (
+          <section className="rounded-[28px] border border-white/70 bg-white/50 px-6 py-16 text-center shadow-[0_20px_60px_rgba(236,72,153,0.08)] backdrop-blur-2xl">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl border border-white/80 bg-white/70 text-pink-300 shadow-lg">
+              <Inbox className="h-9 w-9" />
+            </div>
 
-                        <div className="flex-1 min-w-0">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1">
-                            <h3
-                              className={`font-semibold ${
-                                notification.is_read
-                                  ? "text-slate-600"
-                                  : "text-slate-800"
-                              }`}
-                            >
-                              {notification.title}
-                            </h3>
+            <h2 className="mt-5 text-xl font-bold text-pink-950">
+              {filter === "all"
+                ? "No notifications yet"
+                : "Nothing here"}
+            </h2>
 
-                            <span className="text-xs text-slate-400 shrink-0">
-                              {formatTime(
-                                notification.created_at
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-pink-900/50">
+              {filter === "all"
+                ? "Your task and project updates will appear here."
+                : "There are no notifications matching this filter."}
+            </p>
+          </section>
+        ) : (
+          <div className="space-y-3">
+            {filteredNotifications.map(
+              (notification) => {
+                const isActionLoading =
+                  actionLoading === notification.id;
+
+                return (
+                  <article
+                    key={notification.id}
+                    className={`group relative overflow-hidden rounded-[24px] border p-4 shadow-[0_15px_45px_rgba(236,72,153,0.07)] backdrop-blur-2xl transition sm:p-5 ${
+                      notification.is_read
+                        ? "border-white/70 bg-white/45"
+                        : "border-pink-200/70 bg-white/65 shadow-pink-200/20"
+                    }`}
+                  >
+                    {!notification.is_read && (
+                      <div className="absolute bottom-0 left-0 top-0 w-1 bg-gradient-to-b from-pink-400 to-fuchsia-400" />
+                    )}
+
+                    <div className="flex gap-4">
+                      {/* Icon */}
+                      <div
+                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${getNotificationIconBackground(
+                          notification.type
+                        )}`}
+                      >
+                        {getNotificationIcon(
+                          notification.type
+                        )}
+                      </div>
+
+                      {/* Content */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h2
+                                className={`text-sm font-bold ${
+                                  notification.is_read
+                                    ? "text-pink-950/75"
+                                    : "text-pink-950"
+                                }`}
+                              >
+                                {notification.title}
+                              </h2>
+
+                              {!notification.is_read && (
+                                <span className="rounded-full bg-pink-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white">
+                                  New
+                                </span>
                               )}
-                            </span>
+                            </div>
+
+                            <p className="mt-1.5 text-sm leading-6 text-pink-900/60">
+                              {notification.message}
+                            </p>
                           </div>
 
-                          <p className="text-sm text-slate-400 mt-1 leading-relaxed">
-                            {notification.message}
-                          </p>
+                          <span className="shrink-0 text-xs font-medium text-pink-900/35">
+                            {formatDate(
+                              notification.created_at
+                            )}
+                          </span>
+                        </div>
 
-                          <div className="flex items-center gap-2 mt-3">
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-white/80 bg-white/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-pink-800/60">
+                            {getNotificationTypeLabel(
+                              notification.type
+                            )}
+                          </span>
+
+                          <div className="ml-auto flex items-center gap-1">
                             {!notification.is_read && (
                               <button
+                                type="button"
                                 onClick={() =>
-                                  markAsRead(
+                                  void markAsRead(
                                     notification.id
                                   )
                                 }
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-pink-50 text-pink-500 text-xs font-semibold hover:bg-pink-100 transition"
+                                disabled={
+                                  isActionLoading
+                                }
+                                title="Mark as read"
+                                className="flex h-9 w-9 items-center justify-center rounded-xl text-pink-700/60 transition hover:bg-pink-100 hover:text-pink-700 disabled:opacity-50"
                               >
-                                <Check className="w-3.5 h-3.5" />
-                                Mark as read
+                                {isActionLoading ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Check className="h-4 w-4" />
+                                )}
                               </button>
                             )}
 
-                            {notification.is_read && (
-                              <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-                                <CheckCheck className="w-3.5 h-3.5" />
-                                Read
-                              </span>
-                            )}
-
                             <button
+                              type="button"
                               onClick={() =>
-                                deleteNotification(
+                                void deleteNotification(
                                   notification.id
                                 )
                               }
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-400 text-xs font-semibold hover:text-red-500 hover:bg-red-50 transition"
+                              disabled={
+                                isActionLoading
+                              }
+                              title="Delete notification"
+                              className="flex h-9 w-9 items-center justify-center rounded-xl text-pink-900/35 transition hover:bg-red-100 hover:text-red-600 disabled:opacity-50"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              Delete
+                              {isActionLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
                             </button>
                           </div>
                         </div>
                       </div>
                     </div>
-                  )
-                )}
-              </div>
+                  </article>
+                );
+              }
             )}
           </div>
-        </div>
+        )}
       </div>
     </main>
   );

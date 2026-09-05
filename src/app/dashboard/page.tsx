@@ -1,12 +1,16 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
+
 import { useRouter } from "next/navigation";
+
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 import {
   LayoutDashboard,
@@ -76,11 +80,9 @@ type Task = {
   description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
-
   due_date: string | null;
   due_time: string | null;
   reminder_minutes: number | null;
-
   is_important: boolean;
   project_id: string | null;
   created_at: string;
@@ -282,7 +284,7 @@ export default function DashboardPage() {
   ======================================================= */
 
   const [user, setUser] =
-    useState<any>(null);
+    useState<SupabaseUser | null>(null);
 
   const [tasks, setTasks] =
     useState<Task[]>([]);
@@ -298,10 +300,9 @@ export default function DashboardPage() {
   ======================================================= */
 
   const [activeSection, setActiveSection] =
-    useState<
-      "overview" | "tasks" | "important"
-    >("overview");
-
+  useState<
+    "overview" | "tasks" | "important"
+  >("overview");
   /* =======================================================
      MODALS
   ======================================================= */
@@ -418,14 +419,298 @@ export default function DashboardPage() {
     useState(false);
 
   /* =======================================================
-     LOAD DASHBOARD
+     LOAD UNREAD NOTIFICATIONS
+
+     NOTE: every call site in this file already passes an
+     explicit userId, so this callback does not need to read
+     `user` from closure. Keeping the dependency array empty
+     keeps its identity stable across renders, which in turn
+     keeps `loadDashboard` (below) stable and prevents an
+     extra effect run when `user` is first set.
+  ======================================================= */
+
+  const loadUnreadNotifications =
+    useCallback(
+      async (userId: string) => {
+        if (!userId) {
+          return;
+        }
+
+        const { count, error } =
+          await supabase
+            .from("notifications")
+            .select("*", {
+              count: "exact",
+              head: true,
+            })
+            .eq(
+              "user_id",
+              userId
+            )
+            .eq(
+              "is_read",
+              false
+            );
+
+        if (error) {
+          console.error(
+            "Error loading notifications:",
+            error
+          );
+
+          return;
+        }
+
+        setUnreadNotifications(
+          count || 0
+        );
+      },
+      []
+    );
+
+  /* =======================================================
+     AUTOMATIC DEADLINE NOTIFICATIONS
+  ======================================================= */
+
+  const generateDeadlineNotifications =
+    useCallback(
+      async (
+        userId: string,
+        taskList: Task[]
+      ) => {
+        const activeTasks =
+          taskList.filter(
+            (task) =>
+              task.status !==
+                "completed" &&
+              task.due_date
+          );
+
+        if (
+          activeTasks.length === 0
+        ) {
+          return;
+        }
+
+        const taskIds =
+          activeTasks.map(
+            (task) => task.id
+          );
+
+        const {
+          data: existingNotifications,
+          error,
+        } = await supabase
+          .from("notifications")
+          .select(
+            "id, task_id, type"
+          )
+          .eq(
+            "user_id",
+            userId
+          )
+          .in(
+            "task_id",
+            taskIds
+          )
+          .in(
+            "type",
+            ["deadline", "overdue"]
+          );
+
+        if (error) {
+          console.error(
+            "Error checking deadline notifications:",
+            error
+          );
+
+          return;
+        }
+
+        const existing =
+          existingNotifications || [];
+
+        const today =
+          getTodayString();
+
+        const tomorrow =
+          getTomorrowString();
+
+        for (const task of activeTasks) {
+          if (!task.due_date) {
+            continue;
+          }
+
+          const taskNotifications =
+            existing.filter(
+              (notification) =>
+                notification.task_id ===
+                task.id
+            );
+
+          /* OVERDUE */
+
+          if (
+            task.due_date < today
+          ) {
+            const alreadyNotified =
+              taskNotifications.some(
+                (notification) =>
+                  notification.type ===
+                  "overdue"
+              );
+
+            if (!alreadyNotified) {
+              await notifyTaskOverdue(
+                userId,
+                task.id,
+                task.title
+              );
+            }
+
+            continue;
+          }
+
+          /* DEADLINE */
+
+          if (
+            task.due_date === today ||
+            task.due_date === tomorrow
+          ) {
+            const alreadyNotified =
+              taskNotifications.some(
+                (notification) =>
+                  notification.type ===
+                  "deadline"
+              );
+
+            if (!alreadyNotified) {
+              await notifyUpcomingDeadline(
+                userId,
+                task.id,
+                task.title,
+                task.due_date
+              );
+            }
+          }
+        }
+      },
+      []
+    );
+
+  /* =======================================================
+     LOAD DASHBOARD DATA
+  ======================================================= */
+
+  const loadDashboard =
+    useCallback(
+      async () => {
+        setLoading(true);
+
+        const {
+          data: authData,
+          error: authError,
+        } =
+          await supabase.auth.getUser();
+
+        if (
+          authError ||
+          !authData.user
+        ) {
+          router.push("/login");
+          return;
+        }
+
+        const currentUser =
+          authData.user;
+
+        setUser(currentUser);
+
+        const [
+          tasksResponse,
+          projectsResponse,
+        ] = await Promise.all([
+          supabase
+            .from("tasks")
+            .select("*")
+            .eq(
+              "user_id",
+              currentUser.id
+            )
+            .order("created_at", {
+              ascending: false,
+            }),
+
+          supabase
+            .from("projects")
+            .select("*")
+            .eq(
+              "user_id",
+              currentUser.id
+            )
+            .order("created_at", {
+              ascending: false,
+            }),
+        ]);
+
+        if (tasksResponse.error) {
+          console.error(
+            "Error loading tasks:",
+            tasksResponse.error
+          );
+        }
+
+        if (projectsResponse.error) {
+          console.error(
+            "Error loading projects:",
+            projectsResponse.error
+          );
+        }
+
+        const loadedTasks =
+          (tasksResponse.data ||
+            []) as Task[];
+
+        const loadedProjects =
+          (projectsResponse.data ||
+            []) as Project[];
+
+        setTasks(loadedTasks);
+        setProjects(loadedProjects);
+
+        await generateDeadlineNotifications(
+          currentUser.id,
+          loadedTasks
+        );
+
+        await loadUnreadNotifications(
+          currentUser.id
+        );
+
+        setLoading(false);
+      },
+      [
+        router,
+        generateDeadlineNotifications,
+        loadUnreadNotifications,
+      ]
+    );
+
+  /* =======================================================
+     INITIAL LOAD
   ======================================================= */
 
   useEffect(() => {
+  const timer = setTimeout(() => {
     loadDashboard();
-  }, []);
+  }, 0);
 
-  /* =======================================================
+  return () => {
+    clearTimeout(timer);
+  };
+}, [loadDashboard]);
+
+ /* =======================================================
      REALTIME NOTIFICATIONS
   ======================================================= */
 
@@ -434,7 +719,9 @@ export default function DashboardPage() {
       return;
     }
 
-    loadUnreadNotifications();
+    const timer = setTimeout(() => {
+      loadUnreadNotifications(user.id);
+    }, 0);
 
     const channel = supabase
       .channel(
@@ -449,277 +736,19 @@ export default function DashboardPage() {
           filter: `user_id=eq.${user.id}`,
         },
         () => {
-          loadUnreadNotifications();
+          loadUnreadNotifications(user.id);
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(
-        channel
-      );
+      clearTimeout(timer);
+      supabase.removeChannel(channel);
     };
-  }, [user]);
-
-  /* =======================================================
-     LOAD DASHBOARD DATA
-  ======================================================= */
-
-  async function loadDashboard() {
-    setLoading(true);
-
-    const {
-      data: authData,
-      error: authError,
-    } =
-      await supabase.auth.getUser();
-
-    if (
-      authError ||
-      !authData.user
-    ) {
-      router.push("/login");
-      return;
-    }
-
-    const currentUser =
-      authData.user;
-
-    setUser(currentUser);
-
-    const [
-      tasksResponse,
-      projectsResponse,
-    ] = await Promise.all([
-      supabase
-        .from("tasks")
-        .select("*")
-        .eq(
-          "user_id",
-          currentUser.id
-        )
-        .order("created_at", {
-          ascending: false,
-        }),
-
-      supabase
-        .from("projects")
-        .select("*")
-        .eq(
-          "user_id",
-          currentUser.id
-        )
-        .order("created_at", {
-          ascending: false,
-        }),
-    ]);
-
-    if (tasksResponse.error) {
-      console.error(
-        "Error loading tasks:",
-        tasksResponse.error
-      );
-    }
-
-    if (projectsResponse.error) {
-      console.error(
-        "Error loading projects:",
-        projectsResponse.error
-      );
-    }
-
-    const loadedTasks =
-      (tasksResponse.data ||
-        []) as Task[];
-
-    const loadedProjects =
-      (projectsResponse.data ||
-        []) as Project[];
-
-    setTasks(loadedTasks);
-    setProjects(loadedProjects);
-
-    await generateDeadlineNotifications(
-      currentUser.id,
-      loadedTasks
-    );
-
-    await loadUnreadNotifications(
-      currentUser.id
-    );
-
-    setLoading(false);
-  }
-
-  /* =======================================================
-     LOAD UNREAD NOTIFICATIONS
-  ======================================================= */
-
-  async function loadUnreadNotifications(
-    userId?: string
-  ) {
-    const currentUserId =
-      userId || user?.id;
-
-    if (!currentUserId) {
-      return;
-    }
-
-    const { count, error } =
-      await supabase
-        .from("notifications")
-        .select("*", {
-          count: "exact",
-          head: true,
-        })
-        .eq(
-          "user_id",
-          currentUserId
-        )
-        .eq(
-          "is_read",
-          false
-        );
-
-    if (error) {
-      console.error(
-        "Error loading notifications:",
-        error
-      );
-
-      return;
-    }
-
-    setUnreadNotifications(
-      count || 0
-    );
-  }
-
-  /* =======================================================
-     AUTOMATIC DEADLINE NOTIFICATIONS
-  ======================================================= */
-
-  async function generateDeadlineNotifications(
-    userId: string,
-    taskList: Task[]
-  ) {
-    const activeTasks =
-      taskList.filter(
-        (task) =>
-          task.status !==
-            "completed" &&
-          task.due_date
-      );
-
-    if (
-      activeTasks.length === 0
-    ) {
-      return;
-    }
-
-    const taskIds =
-      activeTasks.map(
-        (task) => task.id
-      );
-
-    const {
-      data: existingNotifications,
-      error,
-    } = await supabase
-      .from("notifications")
-      .select(
-        "id, task_id, type"
-      )
-      .eq(
-        "user_id",
-        userId
-      )
-      .in(
-        "task_id",
-        taskIds
-      )
-      .in(
-        "type",
-        ["deadline", "overdue"]
-      );
-
-    if (error) {
-      console.error(
-        "Error checking deadline notifications:",
-        error
-      );
-
-      return;
-    }
-
-    const existing =
-      existingNotifications || [];
-
-    const today =
-      getTodayString();
-
-    const tomorrow =
-      getTomorrowString();
-
-    for (const task of activeTasks) {
-      if (!task.due_date) {
-        continue;
-      }
-
-      const taskNotifications =
-        existing.filter(
-          (notification) =>
-            notification.task_id ===
-            task.id
-        );
-
-      /* OVERDUE */
-
-      if (
-        task.due_date < today
-      ) {
-        const alreadyNotified =
-          taskNotifications.some(
-            (notification) =>
-              notification.type ===
-              "overdue"
-          );
-
-        if (!alreadyNotified) {
-          await notifyTaskOverdue(
-            userId,
-            task.id,
-            task.title
-          );
-        }
-
-        continue;
-      }
-
-      /* DEADLINE */
-
-      if (
-        task.due_date === today ||
-        task.due_date === tomorrow
-      ) {
-        const alreadyNotified =
-          taskNotifications.some(
-            (notification) =>
-              notification.type ===
-              "deadline"
-          );
-
-        if (!alreadyNotified) {
-          await notifyUpcomingDeadline(
-            userId,
-            task.id,
-            task.title,
-            task.due_date
-          );
-        }
-      }
-    }
-  }
+  }, [
+    user,
+    loadUnreadNotifications,
+  ]);
 
   /* =======================================================
      CREATE TASK
@@ -2531,14 +2560,11 @@ export default function DashboardPage() {
                                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-purple-100 bg-purple-50 text-purple-500 text-xs">
                                     <Bell className="w-3.5 h-3.5" />
 
-                                    {task.reminder_minutes <
-                                    60
+                                    {task.reminder_minutes < 60
                                       ? `${task.reminder_minutes} min reminder`
-                                      : task.reminder_minutes ===
-                                        60
+                                      : task.reminder_minutes === 60
                                       ? "1 hour reminder"
-                                      : task.reminder_minutes ===
-                                        1440
+                                      : task.reminder_minutes === 1440
                                       ? "1 day reminder"
                                       : `${task.reminder_minutes} min reminder`}
                                   </span>
@@ -2655,100 +2681,38 @@ export default function DashboardPage() {
         <TaskModal
           mode="create"
           title="Create New Task"
-          buttonText={
-            saving
-              ? "Creating..."
-              : "Create Task"
-          }
+          buttonText={saving ? "Creating..." : "Create Task"}
           saving={saving}
-
-          taskTitle={
-            newTitle
-          }
-
-          description={
-            newDescription
-          }
-
-          priority={
-            newPriority
-          }
-
-          dueDate={
-            newDueDate
-          }
-
-          dueTime={
-            newDueTime
-          }
-
-          reminderMinutes={
-            newReminderMinutes
-          }
-
-          important={
-            newImportant
-          }
-
+          taskTitle={newTitle}
+          description={newDescription}
+          priority={newPriority}
+          dueDate={newDueDate}
+          dueTime={newDueTime}
+          reminderMinutes={newReminderMinutes}
+          important={newImportant}
           status="todo"
-
-          projectId={
-            newProjectId
-          }
-
-          projects={
-            projects
-          }
-
-          setTaskTitle={
-            setNewTitle
-          }
-
-          setDescription={
-            setNewDescription
-          }
-
-          setPriority={
-            setNewPriority
-          }
-
-          setDueDate={
-            setNewDueDate
-          }
-
-          setDueTime={
-            setNewDueTime
-          }
-
-          setReminderMinutes={
-            setNewReminderMinutes
-          }
-
-          setImportant={
-            setNewImportant
-          }
-
-          setStatus={
-            setEditStatus
-          }
-
-          setProjectId={
-            setNewProjectId
-          }
-
+          projectId={newProjectId}
+          projects={projects}
+          setTaskTitle={setNewTitle}
+          setDescription={setNewDescription}
+          setPriority={setNewPriority}
+          setDueDate={setNewDueDate}
+          setDueTime={setNewDueTime}
+          setReminderMinutes={setNewReminderMinutes}
+          setImportant={setNewImportant}
+          setStatus={() => {
+            /* Status is not editable in create mode; the task always
+               starts as "todo" (see createTask). This is an intentional
+               no-op so the create form never touches edit-form state. */
+          }}
+          setProjectId={setNewProjectId}
           onClose={() => {
             if (!saving) {
-              setShowCreateModal(
-                false
-              );
-
+              setShowCreateModal(false);
               resetCreateForm();
             }
           }}
-
-          onSave={
-            createTask
-          }
+          onSave={createTask}
         />
       )}
 
@@ -2756,111 +2720,40 @@ export default function DashboardPage() {
           EDIT MODAL
       ===================================================== */}
 
-      {showEditModal &&
-        editingTask && (
-          <TaskModal
-            mode="edit"
-            title="Edit Task"
-            buttonText={
-              saving
-                ? "Saving..."
-                : "Save Changes"
+      {showEditModal && editingTask && (
+        <TaskModal
+          mode="edit"
+          title="Edit Task"
+          buttonText={saving ? "Saving..." : "Save Changes"}
+          saving={saving}
+          taskTitle={editTitle}
+          description={editDescription}
+          priority={editPriority}
+          dueDate={editDueDate}
+          dueTime={editDueTime}
+          reminderMinutes={editReminderMinutes}
+          important={editImportant}
+          status={editStatus}
+          projectId={editProjectId}
+          projects={projects}
+          setTaskTitle={setEditTitle}
+          setDescription={setEditDescription}
+          setPriority={setEditPriority}
+          setDueDate={setEditDueDate}
+          setDueTime={setEditDueTime}
+          setReminderMinutes={setEditReminderMinutes}
+          setImportant={setEditImportant}
+          setStatus={setEditStatus}
+          setProjectId={setEditProjectId}
+          onClose={() => {
+            if (!saving) {
+              setShowEditModal(false);
+              setEditingTask(null);
             }
-            saving={saving}
-
-            taskTitle={
-              editTitle
-            }
-
-            description={
-              editDescription
-            }
-
-            priority={
-              editPriority
-            }
-
-            dueDate={
-              editDueDate
-            }
-
-            dueTime={
-              editDueTime
-            }
-
-            reminderMinutes={
-              editReminderMinutes
-            }
-
-            important={
-              editImportant
-            }
-
-            status={
-              editStatus
-            }
-
-            projectId={
-              editProjectId
-            }
-
-            projects={
-              projects
-            }
-
-            setTaskTitle={
-              setEditTitle
-            }
-
-            setDescription={
-              setEditDescription
-            }
-
-            setPriority={
-              setEditPriority
-            }
-
-            setDueDate={
-              setEditDueDate
-            }
-
-            setDueTime={
-              setEditDueTime
-            }
-
-            setReminderMinutes={
-              setEditReminderMinutes
-            }
-
-            setImportant={
-              setEditImportant
-            }
-
-            setStatus={
-              setEditStatus
-            }
-
-            setProjectId={
-              setEditProjectId
-            }
-
-            onClose={() => {
-              if (!saving) {
-                setShowEditModal(
-                  false
-                );
-
-                setEditingTask(
-                  null
-                );
-              }
-            }}
-
-            onSave={
-              saveEditedTask
-            }
-          />
-        )}
+          }}
+          onSave={saveEditedTask}
+        />
+      )}
     </main>
   );
 }
@@ -2909,9 +2802,7 @@ function FilterSelect({
 }: {
   label: string;
   value: string;
-  onChange: (
-    value: string
-  ) => void;
+  onChange: (value: string) => void;
   children: ReactNode;
 }) {
   return (
@@ -2924,9 +2815,7 @@ function FilterSelect({
         <select
           value={value}
           onChange={(event) =>
-            onChange(
-              event.target.value
-            )
+            onChange(event.target.value)
           }
           className="w-full appearance-none rounded-2xl border border-white bg-white/80 px-4 py-3 pr-10 text-sm outline-none focus:ring-2 focus:ring-pink-200"
         >

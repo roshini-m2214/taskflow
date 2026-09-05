@@ -17,7 +17,9 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
+  const handleLogin = async (
+    e: FormEvent<HTMLFormElement>
+  ) => {
     e.preventDefault();
 
     setError("");
@@ -53,8 +55,12 @@ export default function LoginPage() {
         return;
       }
 
-      const params = new URLSearchParams(window.location.search);
-      const redirectPath = params.get("redirect");
+      const params = new URLSearchParams(
+        window.location.search
+      );
+
+      const redirectPath =
+        params.get("redirect");
 
       const safeRedirect =
         redirectPath &&
@@ -67,7 +73,9 @@ export default function LoginPage() {
       router.refresh();
     } catch (err) {
       console.error("Login error:", err);
-      setError("Something went wrong. Please try again.");
+      setError(
+        "Something went wrong. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -79,7 +87,9 @@ export default function LoginPage() {
     const trimmedEmail = email.trim();
 
     if (!trimmedEmail) {
-      setError("Enter your email address first.");
+      setError(
+        "Enter your email address first."
+      );
       return;
     }
 
@@ -103,8 +113,14 @@ export default function LoginPage() {
         "Password reset instructions have been sent to your email."
       );
     } catch (err) {
-      console.error("Password reset error:", err);
-      setError("Unable to send password reset email.");
+      console.error(
+        "Password reset error:",
+        err
+      );
+
+      setError(
+        "Unable to send password reset email."
+      );
     } finally {
       setLoading(false);
     }
@@ -156,7 +172,10 @@ export default function LoginPage() {
 
           <span className="text-2xl font-bold tracking-tight text-gray-900">
 
-            Task<span className="text-pink-500">Flow</span>
+            Task
+            <span className="text-pink-500">
+              Flow
+            </span>
 
           </span>
 
@@ -362,7 +381,8 @@ export default function LoginPage() {
 
                     <span className="text-2xl font-bold text-gray-900">
 
-                      Task<span className="text-pink-500">
+                      Task
+                      <span className="text-pink-500">
                         Flow
                       </span>
 
@@ -403,13 +423,11 @@ export default function LoginPage() {
                 ================================= */}
 
                 {error && (
-
                   <div className="mb-5 rounded-2xl bg-pink-50/80 backdrop-blur-xl border border-pink-200 px-4 py-3 text-sm text-pink-600">
 
                     {error}
 
                   </div>
-
                 )}
 
                 {/* =================================
@@ -437,7 +455,9 @@ export default function LoginPage() {
                       type="email"
                       value={email}
                       onChange={(e) =>
-                        setEmail(e.target.value)
+                        setEmail(
+                          e.target.value
+                        )
                       }
                       placeholder="you@example.com"
                       autoComplete="email"
@@ -462,7 +482,9 @@ export default function LoginPage() {
 
                       <button
                         type="button"
-                        onClick={handleForgotPassword}
+                        onClick={
+                          handleForgotPassword
+                        }
                         disabled={loading}
                         className="text-sm font-semibold text-pink-500 hover:text-pink-600 transition disabled:opacity-50"
                       >
@@ -482,7 +504,9 @@ export default function LoginPage() {
                         }
                         value={password}
                         onChange={(e) =>
-                          setPassword(e.target.value)
+                          setPassword(
+                            e.target.value
+                          )
                         }
                         placeholder="Enter your password"
                         autoComplete="current-password"
@@ -493,7 +517,9 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() =>
-                          setShowPassword(!showPassword)
+                          setShowPassword(
+                            !showPassword
+                          )
                         }
                         disabled={loading}
                         className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-pink-500 transition"
@@ -503,7 +529,9 @@ export default function LoginPage() {
                             : "Show password"
                         }
                       >
-                        {showPassword ? "◉" : "◌"}
+                        {showPassword
+                          ? "◉"
+                          : "◌"}
                       </button>
 
                     </div>
@@ -519,7 +547,9 @@ export default function LoginPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        setRememberMe(!rememberMe)
+                        setRememberMe(
+                          !rememberMe
+                        )
                       }
                       disabled={loading}
                       className={`w-5 h-5 rounded-md border flex items-center justify-center transition ${
@@ -602,7 +632,7 @@ export default function LoginPage() {
 
                 <p className="text-center text-sm text-gray-500 mt-7">
 
-                  Don't have an account?{" "}
+                  Don&apos;t have an account?{" "}
 
                   <Link
                     href="/signup"

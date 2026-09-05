@@ -28,27 +28,36 @@ export default function ProfilePage() {
     useState("");
 
   useEffect(() => {
-    loadProfile();
-  }, []);
+    let cancelled = false;
 
-  async function loadProfile() {
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
+    const loadProfile = async () => {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
 
-    if (error || !user) {
-      router.push("/login");
-      return;
-    }
+      if (cancelled) {
+        return;
+      }
 
-    setEmail(user.email || "");
-    setFullName(
-      user.user_metadata?.full_name || ""
-    );
+      if (error || !user) {
+        router.push("/login");
+        return;
+      }
 
-    setLoading(false);
-  }
+      setEmail(user.email || "");
+      setFullName(
+        user.user_metadata?.full_name || ""
+      );
+      setLoading(false);
+    };
+
+    void loadProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function saveProfile() {
     if (!fullName.trim()) {

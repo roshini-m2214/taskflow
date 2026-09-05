@@ -49,49 +49,63 @@ export default function ProgressPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadProgress();
-  }, []);
+    let cancelled = false;
 
-  async function loadProgress() {
-    setLoading(true);
+    const loadProgress = async () => {
+      setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      router.push("/login");
-      return;
-    }
+      if (cancelled) {
+        return;
+      }
 
-    const [tasksResult, projectsResult] = await Promise.all([
-      supabase
-        .from("tasks")
-        .select(
-          "id, user_id, title, status, priority, is_important, project_id, created_at, updated_at"
-        )
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false }),
+      if (!user) {
+        router.push("/login");
+        return;
+      }
 
-      supabase
-        .from("projects")
-        .select("id, name, color")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true }),
-    ]);
+      const [tasksResult, projectsResult] = await Promise.all([
+        supabase
+          .from("tasks")
+          .select(
+            "id, user_id, title, status, priority, is_important, project_id, created_at, updated_at"
+          )
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
 
-    if (tasksResult.error) {
-      console.error("Tasks error:", tasksResult.error);
-    }
+        supabase
+          .from("projects")
+          .select("id, name, color")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: true }),
+      ]);
 
-    if (projectsResult.error) {
-      console.error("Projects error:", projectsResult.error);
-    }
+      if (cancelled) {
+        return;
+      }
 
-    setTasks(tasksResult.data ?? []);
-    setProjects(projectsResult.data ?? []);
-    setLoading(false);
-  }
+      if (tasksResult.error) {
+        console.error("Tasks error:", tasksResult.error);
+      }
+
+      if (projectsResult.error) {
+        console.error("Projects error:", projectsResult.error);
+      }
+
+      setTasks(tasksResult.data ?? []);
+      setProjects(projectsResult.data ?? []);
+      setLoading(false);
+    };
+
+    void loadProgress();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   const stats = useMemo(() => {
     const total = tasks.length;
@@ -347,7 +361,7 @@ export default function ProgressPage() {
               {projectStats.length === 0 ? (
                 <div className="rounded-2xl bg-pink-50/60 p-6 text-center">
                   <p className="text-sm font-medium text-slate-600">
-                    You haven't created any projects yet.
+                    You haven&apos;t created any projects yet.
                   </p>
 
                   <button
