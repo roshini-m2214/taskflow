@@ -65,10 +65,7 @@ export async function proxy(request: NextRequest) {
   );
 
   if (isProtectedRoute && !user) {
-    const loginUrl = new URL(
-      "/login",
-      request.url
-    );
+    const loginUrl = new URL("/login", request.url);
 
     loginUrl.searchParams.set(
       "redirect",
@@ -83,12 +80,9 @@ export async function proxy(request: NextRequest) {
       pathname === "/signup") &&
     user
   ) {
-    const dashboardUrl = new URL(
-      "/dashboard",
-      request.url
+    return NextResponse.redirect(
+      new URL("/dashboard", request.url)
     );
-
-    return NextResponse.redirect(dashboardUrl);
   }
 
   return response;
