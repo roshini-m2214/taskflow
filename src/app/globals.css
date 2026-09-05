@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  --background: #08090d;
-  --foreground: #ffffff;
+  --background: #fff0f5;
+  --foreground: #2b1720;
 
-  --primary: #43aa8b;
-  --primary-dark: #4d908e;
-  --secondary: #277da1;
+  --primary: #f94144;
+  --primary-dark: #e63946;
+  --secondary: #f3722c;
 
   --danger: #f94144;
   --orange: #f3722c;
@@ -15,7 +15,12 @@
   --warning: #f9c74f;
 
   --success: #90be6d;
-  --muted: #577590;
+  --muted: #8f6674;
+
+  --baby-pink: #fff0f5;
+  --soft-pink: #ffe4ec;
+  --glass-white: rgba(255, 255, 255, 0.58);
+  --glass-border: rgba(255, 255, 255, 0.75);
 }
 
 * {
@@ -43,6 +48,6 @@ button {
 }
 
 ::selection {
-  background: rgba(67, 170, 139, 0.35);
-  color: #ffffff;
+  background: rgba(249, 65, 68, 0.25);
+  color: #2b1720;
 }
