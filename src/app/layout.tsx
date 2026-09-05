@@ -17,6 +17,34 @@ export const metadata: Metadata = {
   title: "TaskFlow",
   description:
     "Organize your tasks, focus on what matters, and make steady progress.",
+
+  metadataBase: new URL("https://taskflow-rosh12.vercel.app"),
+
+  openGraph: {
+    title: "TaskFlow",
+    description:
+      "Organize your tasks, projects, deadlines, and productivity in one place.",
+    url: "https://taskflow-rosh12.vercel.app",
+    siteName: "TaskFlow",
+    images: [
+      {
+        url: "/taskflow-preview.png",
+        width: 235,
+        height: 235,
+        alt: "TaskFlow",
+      },
+    ],
+    locale: "en_US",
+    type: "website",
+  },
+
+  twitter: {
+    card: "summary_large_image",
+    title: "TaskFlow",
+    description:
+      "Organize your tasks, projects, deadlines, and productivity in one place.",
+    images: ["/taskflow-preview.png"],
+  },
 };
 
 export default function RootLayout({
